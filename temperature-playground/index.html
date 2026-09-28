@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    Security guardrail: this page may only load its own files, and may only
+    send network requests to api.openai.com. ("file:" lets it work when you
+    open index.html straight from your computer.)
+  -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self' file:; style-src 'self' file:; img-src data:; connect-src https://api.openai.com; base-uri 'none'; form-action 'none'">
+  <title>LLM Temperature Playground</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌡️</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="page-header">
+    <h1>LLM Temperature Playground</h1>
+    <p class="lede">
+      Type a prompt, pick a temperature, and send it to OpenAI with your own API key.
+      Then see exactly what went out and what came back.
+    </p>
+  </header>
+
+  <main class="layout">
+    <div class="column">
+      <!-- Step 1: API key -->
+      <section class="card" id="key-card" aria-labelledby="key-heading">
+        <h2 id="key-heading"><span class="step" aria-hidden="true">1</span> Your OpenAI API key</h2>
+        <label for="api-key" class="visually-hidden">OpenAI API key</label>
+        <div class="key-row">
+          <input id="api-key" type="password" placeholder="sk-..." autocomplete="off"
+                 autocapitalize="off" spellcheck="false" aria-describedby="key-status key-help">
+          <button type="button" id="toggle-key" aria-pressed="false">Show</button>
+          <button type="button" id="forget-key">Forget</button>
+        </div>
+        <p id="key-status" class="key-status" aria-live="polite"></p>
+        <p id="key-help" class="hint">
+          Saved only in this browser (<code>localStorage</code>) and sent only to
+          <code>api.openai.com</code>. Don't have a key?
+          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Create one</a>.
+        </p>
+      </section>
+
+      <!-- Step 2: build the request -->
+      <section class="card" id="request-card" aria-labelledby="request-heading">
+        <h2 id="request-heading"><span class="step" aria-hidden="true">2</span> Build your request</h2>
+
+        <div class="field">
+          <label for="prompt">Prompt</label>
+          <textarea id="prompt" rows="3" placeholder="e.g. The sky is">The sky is</textarea>
+        </div>
+
+        <div class="field temperature-field" id="temperature-field">
+          <div class="label-row">
+            <label for="temperature">Temperature</label>
+            <output id="temperature-value" for="temperature">1.0</output>
+          </div>
+          <input id="temperature" type="range" min="0" max="2" step="0.1" value="1"
+                 aria-describedby="temperature-explainer">
+          <div class="scale" aria-hidden="true">
+            <span>0 · predictable</span><span>1 · default</span><span>2 · random</span>
+          </div>
+          <p id="temperature-hint" class="temperature-hint"></p>
+          <p id="temperature-explainer" class="explainer">
+            <strong>Low (near 0):</strong> more deterministic. The model sticks to its most likely
+            words, so you get nearly the same reply every time.<br>
+            <strong>High (near 2):</strong> more random and creative. Unlikely words get picked more
+            often, so replies vary a lot, and eventually turn into nonsense.
+          </p>
+          <details class="more">
+            <summary>How does temperature actually work?</summary>
+            <p>
+              The model writes its reply one <em>token</em> (a word or piece of a word) at a time.
+              At each step it gives every possible next token a probability. After
+              “The sky is”, that might look like <code>blue</code> 80%, <code>clear</code> 10%,
+              <code>falling</code> 0.1%…
+            </p>
+            <p>Temperature reshapes those odds before one token is drawn at random:</p>
+            <ul>
+              <li><strong>Below 1</strong> sharpens them, so the favorite wins even more often.
+                At 0 the model simply takes the top choice.</li>
+              <li><strong>At 1</strong> the odds stay exactly as the model produced them.</li>
+              <li><strong>Above 1</strong> flattens them, so long shots get a real chance. Near 2
+                they win often enough that the reply falls apart.</li>
+            </ul>
+            <p>The name comes from physics: heat a system up and unlikely states become more likely.</p>
+          </details>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="model">Model</label>
+            <select id="model">
+              <option value="gpt-4.1-mini" selected>gpt-4.1-mini (default)</option>
+              <option value="gpt-4.1-nano">gpt-4.1-nano (fastest, cheapest)</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="custom">Other…</option>
+            </select>
+            <input id="custom-model" type="text" placeholder="Type a model name"
+                   autocomplete="off" autocapitalize="off" spellcheck="false"
+                   aria-label="Custom model name" hidden>
+          </div>
+          <div class="field">
+            <label for="max-tokens">Max reply length</label>
+            <input id="max-tokens" type="number" min="1" step="1" value="300" inputmode="numeric"
+                   aria-describedby="max-tokens-help">
+            <p id="max-tokens-help" class="hint">In tokens (about ¾ of a word each). Stops high temperatures from rambling on.</p>
+          </div>
+        </div>
+
+        <div class="send-row">
+          <button type="button" id="send" class="button-primary">Send to OpenAI</button>
+          <span class="hint">or press <kbd id="shortcut-key">Ctrl</kbd> + <kbd>Enter</kbd></span>
+        </div>
+        <p id="send-problem" class="problem" role="alert" hidden></p>
+      </section>
+    </div>
+
+    <div class="column">
+      <!-- Step 3: the response -->
+      <section class="card" id="response-card" aria-labelledby="response-heading">
+        <h2 id="response-heading"><span class="step" aria-hidden="true">3</span> What comes back</h2>
+
+        <p id="response-empty" class="empty">Your reply will show up here after you press <strong>Send</strong>.</p>
+        <p id="response-status" class="status" role="status" hidden></p>
+
+        <div id="response-error" class="error" hidden>
+          <p id="error-message" class="error-message"></p>
+          <p id="error-source" class="hint">This message is <code>error.message</code> in the raw JSON below.</p>
+          <p id="error-hint" class="error-hint"></p>
+        </div>
+
+        <div id="reply-block" hidden>
+          <p class="eyebrow">Assistant reply</p>
+          <blockquote id="reply" class="reply"></blockquote>
+          <p class="hint">
+            Pulled out of the JSON below at <code>choices[0].message.content</code> (highlighted).
+          </p>
+          <p id="finish-note" class="note" hidden></p>
+        </div>
+
+        <div id="raw-block" hidden>
+          <div class="label-row">
+            <h3 id="raw-heading">Raw JSON response</h3>
+            <button type="button" class="button-small" data-copy-target="response-json">Copy</button>
+          </div>
+          <pre id="response-json" class="code json" tabindex="0" aria-label="Raw JSON response"></pre>
+        </div>
+      </section>
+
+      <!-- The request, shown live -->
+      <section class="card" id="sent-card" aria-labelledby="sent-heading">
+        <h2 id="sent-heading">What your browser sends</h2>
+        <p class="hint">
+          This updates live as you change the settings. Drag the slider and watch the highlighted
+          <code>temperature</code> change.
+        </p>
+        <pre class="code" aria-label="HTTP method, address and headers"><span class="http-method">POST</span> https://api.openai.com/v1/chat/completions
+Content-Type: application/json
+Authorization: Bearer <span class="placeholder">&lt;your API key&gt;</span></pre>
+        <pre id="request-json" class="code json" tabindex="0" aria-label="Request body (JSON)"></pre>
+        <details class="more">
+          <summary>Send the same request yourself from a terminal (curl)</summary>
+          <div class="label-row curl-row">
+            <p class="hint">For macOS and Linux terminals (on Windows, use WSL or Git Bash).</p>
+            <button type="button" class="button-small" data-copy-target="curl">Copy</button>
+          </div>
+          <pre id="curl" class="code" tabindex="0" aria-label="curl command"></pre>
+        </details>
+      </section>
+    </div>
+
+    <!-- History, so you can compare temperatures side by side -->
+    <section class="card" id="history-card" aria-labelledby="history-heading" hidden>
+      <div class="label-row">
+        <h2 id="history-heading">Compare your runs</h2>
+        <button type="button" id="clear-history" class="button-small">Clear</button>
+      </div>
+      <p class="hint">
+        Newest first. Temperature only really shows up across several sends: try the same prompt
+        three times at 0, then three times at 1.5.
+      </p>
+      <ol id="history" class="history"></ol>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    <p>
+      No server and no tracking: this page talks to exactly one place, <code>api.openai.com</code>,
+      straight from your browser. Curious how? Open <code>app.js</code> and look for <code>send()</code>.
+    </p>
+  </footer>
+</body>
+</html>
